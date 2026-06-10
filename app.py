@@ -2633,6 +2633,50 @@ def _show_debug_screenshot(driver, label=""):
         st.info(f"(Could not capture screenshot: {str(_e)[:150]})")
 
 
+def _nav_click(driver, xpath, text_fragment, step_name, progress_placeholder,
+               timeout=8):
+    """
+    Robust click for the critical post-login navigation buttons.
+    Tries the strict Selenium clickable-wait first, then falls back to a
+    JS click-by-visible-text (more tolerant of headless rendering). On total
+    failure it reports the step name and shows a screenshot so we can see
+    exactly where and why it stopped.
+    """
+    progress_placeholder.info(f"  ➡️ {step_name}...")
+    if find_and_click(driver, xpath, timeout=timeout):
+        return True
+
+    clicked = driver.execute_script("""
+        var frag = arguments[0].toLowerCase().trim();
+        var sels = ['button', 'a', '[role="button"]'];
+        // exact-text match on interactive elements
+        for (var s = 0; s < sels.length; s++) {
+            var els = document.querySelectorAll(sels[s]);
+            for (var i = 0; i < els.length; i++) {
+                var t = (els[i].innerText || els[i].textContent || '').trim().toLowerCase();
+                if (t === frag && els[i].offsetParent) { els[i].click(); return true; }
+            }
+        }
+        // partial-text match on interactive elements
+        for (var s = 0; s < sels.length; s++) {
+            var els = document.querySelectorAll(sels[s]);
+            for (var i = 0; i < els.length; i++) {
+                var t = (els[i].innerText || els[i].textContent || '').trim().toLowerCase();
+                if (t.indexOf(frag) !== -1 && els[i].offsetParent) { els[i].click(); return true; }
+            }
+        }
+        return false;
+    """, text_fragment)
+
+    if clicked:
+        progress_placeholder.info(f"  ✅ {step_name} (via text-click fallback)")
+        return True
+
+    progress_placeholder.error(f"  ❌ Failed at: {step_name}")
+    _show_debug_screenshot(driver, f"Failed: {step_name}")
+    return False
+
+
 def run_automation(mobile_num, otp_code, sections, wait_time=10):
     start_time           = time.time()
     driver               = None
@@ -2773,16 +2817,25 @@ def run_automation(mobile_num, otp_code, sections, wait_time=10):
         progress_placeholder.success("✅ Login Successful!")
 
         progress_placeholder.info("🚀 Step 3: Navigating to Create Assessment...")
-        find_and_click(
-            driver, "//*[contains(text(), 'Create Assessment')]", timeout=wait_time)
-        find_and_click(
-            driver, "//*[contains(text(), 'Custom Assessment')]", timeout=wait_time)
+        if not _nav_click(
+                driver, "//*[contains(text(), 'Create Assessment')]",
+                "Create Assessment", "Click 'Create Assessment'",
+                progress_placeholder, wait_time):
+            return
+        if not _nav_click(
+                driver, "//*[contains(text(), 'Custom Assessment')]",
+                "Custom Assessment", "Click 'Custom Assessment'",
+                progress_placeholder, wait_time):
+            return
 
         progress_placeholder.info("➕ Step 4: Creating Section 1...")
-        find_and_click(driver,
-            "//*[contains(text(),'Create new Section') or "
-            "contains(text(),'Create New Section')]",
-            timeout=wait_time)
+        if not _nav_click(
+                driver,
+                "//*[contains(text(),'Create new Section') or "
+                "contains(text(),'Create New Section')]",
+                "Create new Section", "Click 'Create new Section'",
+                progress_placeholder, wait_time):
+            return
 
         handle_subject_selection(driver, progress_placeholder)
 
