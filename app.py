@@ -19,19 +19,25 @@ from selenium.common.exceptions import TimeoutException, WebDriverException
 # so the React form-filling behaves like it does on a desktop browser.
 # ============================================================
 _VIRTUAL_DISPLAY = None
+_DISPLAY_ERROR = ""
 
 
 def _ensure_virtual_display():
     """Start an Xvfb virtual display once; return True if one is active."""
-    global _VIRTUAL_DISPLAY
+    global _VIRTUAL_DISPLAY, _DISPLAY_ERROR
     if _VIRTUAL_DISPLAY is not None:
         return True
     try:
         from pyvirtualdisplay import Display
         _VIRTUAL_DISPLAY = Display(visible=False, size=(1920, 1080))
         _VIRTUAL_DISPLAY.start()
+        # Confirm DISPLAY actually got set, else treat as failure.
+        if not os.environ.get("DISPLAY"):
+            raise RuntimeError("DISPLAY not set after start()")
+        _DISPLAY_ERROR = ""
         return True
-    except Exception:
+    except Exception as e:
+        _DISPLAY_ERROR = f"{type(e).__name__}: {e}"
         _VIRTUAL_DISPLAY = None
         return False
 
@@ -2756,10 +2762,11 @@ def run_automation(mobile_num, otp_code, sections, wait_time=10):
             options.add_argument('--window-size=1920,1080')
             if _ensure_virtual_display():
                 # Real browser inside the virtual screen — no --headless.
-                progress_placeholder.info("🖥️ Using virtual display (Xvfb)")
+                st.success("🖥️ REAL browser via virtual display (Xvfb) — not headless")
             else:
-                progress_placeholder.warning(
-                    "⚠️ Virtual display unavailable — falling back to headless")
+                st.error(
+                    "⚠️ Virtual display (Xvfb) could NOT start — falling back to "
+                    f"headless. Reason: {_DISPLAY_ERROR or 'unknown'}")
                 options.add_argument('--headless=new')
             _service = (Service(_chromedriver_bin) if _chromedriver_bin
                         else Service(ChromeDriverManager().install()))
