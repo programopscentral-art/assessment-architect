@@ -2339,13 +2339,45 @@ def process_section_questions(driver, questions_df, section_num, progress_placeh
                 f"    🎯 Found: '{btn_txt}' | disabled={btn_info.get('disabled')}")
 
             if btn_info.get('disabled'):
-                reason = "No questions available — button disabled"
-                progress_placeholder.warning(f"  ⚠️ Row {row_num} SKIPPED — {reason}")
-                failed_rows.append({"Section": section_num, "Row": row_num, "Topic": topic,
-                                     "Difficulty": diff, "Sub Topic": sub, "Num Q": num_q,
-                                     "Marks": marks, "Reason": reason})
-                submitted = True
-                break
+                # The portal fetches matching questions asynchronously. On a
+                # remote/headless server (far from the portal) that call is
+                # slower than on a local machine, so the button can still be
+                # disabled when first checked. Wait for it to become enabled
+                # before giving up — this is the main reason rows that work
+                # locally get skipped in the cloud.
+                progress_placeholder.info(
+                    "    ⏳ 'Add Questions' disabled — waiting up to 15s "
+                    "for questions to load...")
+                enabled = _poll(lambda: driver.execute_script("""
+                    var btns = document.querySelectorAll('button');
+                    for (var i = 0; i < btns.length; i++){
+                        var b = btns[i];
+                        var t = (b.innerText || '').trim();
+                        if (t.indexOf('Add Questions') !== -1
+                            && t.charAt(0) !== '+'
+                            && b.offsetParent && !b.disabled) return true;
+                    }
+                    return false;
+                """), timeout=15.0, interval=0.25)
+
+                if not enabled:
+                    reason = "No questions available — button disabled"
+                    progress_placeholder.warning(
+                        f"  ⚠️ Row {row_num} SKIPPED — {reason}")
+                    if len(failed_rows) == 0:
+                        # Screenshot only the FIRST skip so we can see the
+                        # popup state (were the tag/filters actually applied?).
+                        _show_debug_screenshot(
+                            driver, f"Row {row_num}: no questions loaded")
+                    failed_rows.append({"Section": section_num, "Row": row_num, "Topic": topic,
+                                         "Difficulty": diff, "Sub Topic": sub, "Num Q": num_q,
+                                         "Marks": marks, "Reason": reason})
+                    submitted = True
+                    break
+
+                progress_placeholder.info(
+                    "    ✅ Questions loaded — 'Add Questions' now enabled")
+                continue  # re-find the now-enabled button on the next attempt
 
             # FIX: Before each click attempt, dismiss any lingering overlays
             # that could intercept the button click (tag suggestions, etc.)
