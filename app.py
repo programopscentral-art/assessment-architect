@@ -2302,175 +2302,119 @@ def process_section_questions(driver, questions_df, section_num, progress_placeh
         progress_placeholder.info("  📤 Clicking 'Add Questions →'...")
         submitted = False
 
-        for submit_attempt in range(8):
-            progress_placeholder.info(f"    🔁 Attempt {submit_attempt + 1}/8")
-            time.sleep(0.08)
-
-            btn = None
-            btn_info = {}
+        # State of the bottom-most visible "Add Questions" button (not "+ Add").
+        def _btn_state():
             try:
-                all_btns = driver.find_elements(By.XPATH,
-                    "//button[contains(., 'Add Questions') "
-                    "and not(starts-with(normalize-space(.), '+'))]")
-                best_bottom = -1
-                for b in all_btns:
-                    try:
-                        rect = driver.execute_script(
-                            "var r=arguments[0].getBoundingClientRect();"
-                            "return {bottom:r.bottom,width:r.width,height:r.height,"
-                            "disabled:arguments[0].disabled};", b)
-                        if rect['width'] > 0 and rect['bottom'] > best_bottom:
-                            best_bottom = rect['bottom']
-                            btn = b
-                            btn_info = rect
-                    except:
-                        pass
-            except:
-                pass
-
-            if not btn:
-                progress_placeholder.warning(
-                    f"    ⚠️ Button not found on attempt {submit_attempt+1}")
-                time.sleep(0.02)
-                continue
-
-            btn_txt = (btn.text or "").strip()
-            progress_placeholder.info(
-                f"    🎯 Found: '{btn_txt}' | disabled={btn_info.get('disabled')}")
-
-            if btn_info.get('disabled'):
-                # The portal fetches matching questions asynchronously. On a
-                # remote/headless server (far from the portal) that call is
-                # slower than on a local machine, so the button can still be
-                # disabled when first checked. Wait for it to become enabled
-                # before giving up — this is the main reason rows that work
-                # locally get skipped in the cloud.
-                progress_placeholder.info(
-                    "    ⏳ 'Add Questions' disabled — waiting up to 15s "
-                    "for questions to load...")
-                enabled = _poll(lambda: driver.execute_script("""
-                    var btns = document.querySelectorAll('button');
-                    for (var i = 0; i < btns.length; i++){
-                        var b = btns[i];
-                        var t = (b.innerText || '').trim();
-                        if (t.indexOf('Add Questions') !== -1
-                            && t.charAt(0) !== '+'
-                            && b.offsetParent && !b.disabled) return true;
-                    }
-                    return false;
-                """), timeout=15.0, interval=0.25)
-
-                if not enabled:
-                    reason = "No questions available — button disabled"
-                    progress_placeholder.warning(
-                        f"  ⚠️ Row {row_num} SKIPPED — {reason}")
-                    if len(failed_rows) == 0:
-                        # Screenshot only the FIRST skip so we can see the
-                        # popup state (were the tag/filters actually applied?).
-                        _show_debug_screenshot(
-                            driver, f"Row {row_num}: no questions loaded")
-                    failed_rows.append({"Section": section_num, "Row": row_num, "Topic": topic,
-                                         "Difficulty": diff, "Sub Topic": sub, "Num Q": num_q,
-                                         "Marks": marks, "Reason": reason})
-                    submitted = True
-                    break
-
-                progress_placeholder.info(
-                    "    ✅ Questions loaded — 'Add Questions' now enabled")
-                continue  # re-find the now-enabled button on the next attempt
-
-            # FIX: Before each click attempt, dismiss any lingering overlays
-            # that could intercept the button click (tag suggestions, etc.)
-            try:
-                driver.execute_script("""
-                    if (document.activeElement) document.activeElement.blur();
-                    var overlaySelectors = [
-                        '[class*="suggestion"]',
-                        '[class*="autocomplete"]',
-                        '[class*="tag-suggest"]',
-                        '[class*="Tag__menu"]',
-                        '[class*="tags__menu"]',
-                        '[class*="TagInput__dropdown"]',
-                        '[class*="tag-dropdown"]',
-                        '[class*="__dropdown"]',
-                        '[class*="-dropdown"]',
-                        '[class*="__menu"]',
-                        '[class*="-menu"]'
-                    ];
-                    for (var o = 0; o < overlaySelectors.length; o++) {
-                        var overlays = document.querySelectorAll(overlaySelectors[o]);
-                        for (var j = 0; j < overlays.length; j++) {
-                            if (overlays[j].offsetParent) {
-                                overlays[j].style.display = 'none';
-                                overlays[j].style.visibility = 'hidden';
-                                overlays[j].style.pointerEvents = 'none';
-                            }
+                return driver.execute_script("""
+                    var btns=document.querySelectorAll('button');
+                    var best=null,bestBottom=-1;
+                    for(var i=0;i<btns.length;i++){
+                        var b=btns[i];var t=(b.innerText||'').trim();
+                        if(t.indexOf('Add Questions')!==-1 && t.charAt(0)!=='+'){
+                            var r=b.getBoundingClientRect();
+                            if(r.width>0 && b.offsetParent && r.bottom>bestBottom){
+                                bestBottom=r.bottom;best=b;}
                         }
                     }
-                """)
-            except:
-                pass
+                    return best?{found:true,disabled:!!best.disabled}
+                                :{found:false,disabled:false};
+                """) or {"found": False, "disabled": False}
+            except Exception:
+                return {"found": False, "disabled": False}
 
-            try:
-                from selenium.webdriver.common.action_chains import ActionChains
-                driver.execute_script(
-                    "arguments[0].scrollIntoView({block:'center'});", btn)
-                time.sleep(0.02)
-                ActionChains(driver).move_to_element(btn).pause(0.03).click().perform()
-                progress_placeholder.info("    ✅ ActionChains click performed!")
-            except Exception as e:
+        # 1) Wait for the button to exist at all.
+        if not _poll(lambda: _btn_state().get("found"),
+                     timeout=10.0, interval=0.2):
+            reason = "'Add Questions →' button not found"
+            progress_placeholder.error(f"  ❌ Row {row_num} FAILED — {reason}")
+            if len(failed_rows) == 0:
+                _show_debug_screenshot(
+                    driver, f"Row {row_num}: add button not found")
+            failed_rows.append({"Section": section_num, "Row": row_num, "Topic": topic,
+                                 "Difficulty": diff, "Sub Topic": sub, "Num Q": num_q,
+                                 "Marks": marks, "Reason": reason})
+            continue
+
+        # 2) Wait for it to become enabled. The portal loads matching questions
+        #    asynchronously, and that call is slower from a remote server, so a
+        #    row that works locally can look "disabled" if checked too early.
+        if _btn_state().get("disabled"):
+            progress_placeholder.info(
+                "    ⏳ 'Add Questions' disabled — waiting up to 15s "
+                "for questions to load...")
+            if not _poll(
+                    lambda: _btn_state().get("found")
+                            and not _btn_state().get("disabled"),
+                    timeout=15.0, interval=0.25):
+                reason = "No questions available — button disabled"
                 progress_placeholder.warning(
-                    f"    ⚠️ ActionChains failed: {str(e)[:60]}, trying JS...")
-                try:
-                    driver.execute_script("arguments[0].click();", btn)
-                    progress_placeholder.info("    ✅ JS click performed!")
-                except Exception as e2:
-                    # FIX: Final fallback — coordinate-based click that bypasses
-                    # any overlay by clicking whatever element is actually at those
-                    # screen coordinates, then also firing directly on the button.
-                    progress_placeholder.warning(
-                        f"    ⚠️ Both clicks failed: {str(e2)[:60]} — trying coordinate click")
-                    try:
-                        driver.execute_script("""
-                            var btn = arguments[0];
-                            var r = btn.getBoundingClientRect();
-                            var cx = r.left + r.width  / 2;
-                            var cy = r.top  + r.height / 2;
+                    f"  ⚠️ Row {row_num} SKIPPED — {reason}")
+                if len(failed_rows) == 0:
+                    _show_debug_screenshot(
+                        driver, f"Row {row_num}: no questions loaded")
+                failed_rows.append({"Section": section_num, "Row": row_num, "Topic": topic,
+                                     "Difficulty": diff, "Sub Topic": sub, "Num Q": num_q,
+                                     "Marks": marks, "Reason": reason})
+                continue
+            progress_placeholder.info(
+                "    ✅ Questions loaded — 'Add Questions' now enabled")
 
-                            // Click whatever element is visually on top at those coords
-                            var topEl = document.elementFromPoint(cx, cy);
-                            if (topEl) {
-                                topEl.dispatchEvent(new MouseEvent('mousedown',
-                                    {bubbles:true, cancelable:true, clientX:cx, clientY:cy}));
-                                topEl.dispatchEvent(new MouseEvent('mouseup',
-                                    {bubbles:true, cancelable:true, clientX:cx, clientY:cy}));
-                                topEl.dispatchEvent(new MouseEvent('click',
-                                    {bubbles:true, cancelable:true, clientX:cx, clientY:cy}));
-                            }
-
-                            // Also fire directly on the button regardless of overlay
-                            btn.dispatchEvent(new MouseEvent('mousedown',
-                                {bubbles:true, cancelable:true}));
-                            btn.dispatchEvent(new MouseEvent('mouseup',
-                                {bubbles:true, cancelable:true}));
-                            btn.dispatchEvent(new MouseEvent('click',
-                                {bubbles:true, cancelable:true}));
-                        """, btn)
-                        progress_placeholder.info("    ✅ Coordinate + direct JS click performed!")
-                    except:
-                        pass
-                    time.sleep(0.05)
-                    continue
-
-            poll_popup_closed(driver, timeout=0.2)
-            submitted = True
-            progress_placeholder.success(
-                f"  ✅ Section {section_num} Row {row_num}/{total} submitted!")
-            break
+        # 3) Click atomically (find + click in ONE JS call so a React re-render
+        #    can't leave a stale element) and CONFIRM the popup actually closed.
+        #    Retry if the click didn't register — this fixes the old
+        #    "'Add Questions →' not clicked after N attempts" failures.
+        for submit_attempt in range(8):
+            progress_placeholder.info(f"    🔁 Click attempt {submit_attempt+1}/8")
+            clicked = driver.execute_script("""
+                if(document.activeElement) document.activeElement.blur();
+                var ov=['[class*="suggestion"]','[class*="autocomplete"]',
+                        '[class*="__dropdown"]','[class*="-dropdown"]',
+                        '[class*="__menu"]','[class*="-menu"]'];
+                for(var o=0;o<ov.length;o++){
+                    var es=document.querySelectorAll(ov[o]);
+                    for(var j=0;j<es.length;j++){
+                        if(es[j].offsetParent){es[j].style.display='none';
+                            es[j].style.pointerEvents='none';}
+                    }
+                }
+                var btns=document.querySelectorAll('button');
+                var best=null,bestBottom=-1;
+                for(var i=0;i<btns.length;i++){
+                    var b=btns[i];var t=(b.innerText||'').trim();
+                    if(t.indexOf('Add Questions')!==-1 && t.charAt(0)!=='+'
+                        && b.offsetParent && !b.disabled){
+                        var r=b.getBoundingClientRect();
+                        if(r.width>0 && r.bottom>bestBottom){bestBottom=r.bottom;best=b;}
+                    }
+                }
+                if(!best) return false;
+                best.scrollIntoView({block:'center'});
+                try{best.focus();}catch(e){}
+                best.dispatchEvent(new MouseEvent('mousedown',{bubbles:true,cancelable:true}));
+                best.dispatchEvent(new MouseEvent('mouseup',{bubbles:true,cancelable:true}));
+                best.click();
+                return true;
+            """)
+            if not clicked:
+                progress_placeholder.warning(
+                    "    ⚠️ Button not clickable — retrying...")
+                time.sleep(0.2)
+                continue
+            if poll_popup_closed(driver, timeout=3.0):
+                submitted = True
+                progress_placeholder.success(
+                    f"  ✅ Section {section_num} Row {row_num}/{total} submitted!")
+                break
+            progress_placeholder.info(
+                "    ↻ Popup still open after click — retrying...")
+            time.sleep(0.15)
 
         if not submitted:
             reason = "'Add Questions →' not clicked after 8 attempts"
             progress_placeholder.error(f"  ❌ Row {row_num} FAILED — {reason}")
+            if len(failed_rows) == 0:
+                _show_debug_screenshot(
+                    driver, f"Row {row_num}: click not registering")
             failed_rows.append({"Section": section_num, "Row": row_num, "Topic": topic,
                                  "Difficulty": diff, "Sub Topic": sub, "Num Q": num_q,
                                  "Marks": marks, "Reason": reason})
