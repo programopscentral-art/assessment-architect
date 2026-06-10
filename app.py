@@ -2643,36 +2643,79 @@ def _nav_click(driver, xpath, text_fragment, step_name, progress_placeholder,
     exactly where and why it stopped.
     """
     progress_placeholder.info(f"  ➡️ {step_name}...")
+
+    # Give the page time to render the target after navigation/login.
+    poll_element_visible(driver, xpath, timeout=timeout)
+
     if find_and_click(driver, xpath, timeout=timeout):
         return True
 
     clicked = driver.execute_script("""
         var frag = arguments[0].toLowerCase().trim();
-        var sels = ['button', 'a', '[role="button"]'];
-        // exact-text match on interactive elements
-        for (var s = 0; s < sels.length; s++) {
-            var els = document.querySelectorAll(sels[s]);
-            for (var i = 0; i < els.length; i++) {
-                var t = (els[i].innerText || els[i].textContent || '').trim().toLowerCase();
-                if (t === frag && els[i].offsetParent) { els[i].click(); return true; }
-            }
+        function txt(el){
+            return (el.innerText || el.textContent ||
+                    el.getAttribute('aria-label') ||
+                    el.getAttribute('title') || '').trim().toLowerCase();
         }
-        // partial-text match on interactive elements
-        for (var s = 0; s < sels.length; s++) {
-            var els = document.querySelectorAll(sels[s]);
-            for (var i = 0; i < els.length; i++) {
-                var t = (els[i].innerText || els[i].textContent || '').trim().toLowerCase();
-                if (t.indexOf(frag) !== -1 && els[i].offsetParent) { els[i].click(); return true; }
+        function clickable(el){
+            // climb to a real interactive ancestor if one exists
+            var n = el;
+            for (var d = 0; d < 6 && n; d++){
+                var tag = (n.tagName || '').toLowerCase();
+                if (tag === 'button' || tag === 'a' ||
+                    (n.getAttribute && n.getAttribute('role') === 'button'))
+                    return n;
+                n = n.parentElement;
             }
+            return el;
         }
-        return false;
+        var all = document.querySelectorAll(
+            'button,a,[role="button"],div,span,li,p');
+        // exact match first
+        for (var i = 0; i < all.length; i++){
+            var el = all[i];
+            if (!el.offsetParent) continue;
+            if (txt(el) === frag){ var c = clickable(el); c.click();
+                return (c.innerText || c.textContent || '').trim(); }
+        }
+        // partial match — pick the SHORTEST text (most specific element)
+        var best = null, bestLen = 1e9;
+        for (var i = 0; i < all.length; i++){
+            var el = all[i];
+            if (!el.offsetParent) continue;
+            var t = txt(el);
+            if (t.indexOf(frag) !== -1 && t.length < bestLen){
+                best = el; bestLen = t.length; }
+        }
+        if (best){ var c = clickable(best); c.click();
+            return (c.innerText || c.textContent || '').trim(); }
+        return null;
     """, text_fragment)
 
     if clicked:
-        progress_placeholder.info(f"  ✅ {step_name} (via text-click fallback)")
+        progress_placeholder.info(
+            f"  ✅ {step_name} (text-click: '{str(clicked)[:40]}')")
         return True
 
+    # Still failed — dump what interactive elements ARE on the page so we can
+    # see what the real button looks like on the server.
+    inventory = driver.execute_script("""
+        var out = [];
+        var els = document.querySelectorAll('button,a,[role="button"]');
+        for (var i = 0; i < els.length && out.length < 50; i++){
+            if (!els[i].offsetParent) continue;
+            var t = (els[i].innerText || els[i].textContent ||
+                     els[i].getAttribute('aria-label') || '').trim();
+            if (t) out.push(t.substring(0, 50));
+        }
+        return out;
+    """)
     progress_placeholder.error(f"  ❌ Failed at: {step_name}")
+    try:
+        st.warning("🔎 Visible buttons/links on the page at failure:")
+        st.code("\n".join(inventory) if inventory else "(none found)")
+    except Exception:
+        pass
     _show_debug_screenshot(driver, f"Failed: {step_name}")
     return False
 
