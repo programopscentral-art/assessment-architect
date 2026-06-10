@@ -14,6 +14,29 @@ from selenium.webdriver.common.keys import Keys
 from selenium.common.exceptions import TimeoutException, WebDriverException
 
 # ============================================================
+# VIRTUAL DISPLAY (cloud only)
+# Lets a REAL (non-headless) Chromium run on a server with no screen,
+# so the React form-filling behaves like it does on a desktop browser.
+# ============================================================
+_VIRTUAL_DISPLAY = None
+
+
+def _ensure_virtual_display():
+    """Start an Xvfb virtual display once; return True if one is active."""
+    global _VIRTUAL_DISPLAY
+    if _VIRTUAL_DISPLAY is not None:
+        return True
+    try:
+        from pyvirtualdisplay import Display
+        _VIRTUAL_DISPLAY = Display(visible=False, size=(1920, 1080))
+        _VIRTUAL_DISPLAY.start()
+        return True
+    except Exception:
+        _VIRTUAL_DISPLAY = None
+        return False
+
+
+# ============================================================
 # SMART POLLING UTILITIES  (replaces fixed time.sleep)
 # ============================================================
 
@@ -2717,8 +2740,11 @@ def run_automation(mobile_num, otp_code, sections, wait_time=10):
         })
 
         # On a Linux/cloud host (e.g. Streamlit Community Cloud) there is no
-        # display, so use the system Chromium in headless mode. On a normal
-        # desktop (Windows/Mac) keep the original visible-browser behaviour.
+        # physical screen. Rather than run headless (which breaks the React
+        # form-filling this app relies on), start a VIRTUAL display (Xvfb) and
+        # run a REAL, non-headless Chromium inside it — that behaves like the
+        # desktop browser the automation was tuned for. Falls back to headless
+        # only if Xvfb is unavailable. On Windows/Mac keep the original path.
         _chromium_bin = (shutil.which("chromium")
                          or shutil.which("chromium-browser")
                          or shutil.which("google-chrome"))
@@ -2726,9 +2752,15 @@ def run_automation(mobile_num, otp_code, sections, wait_time=10):
         _is_cloud = (os.name != "nt") and bool(_chromium_bin)
 
         if _is_cloud:
-            options.add_argument('--headless=new')
-            options.add_argument('--window-size=1920,1080')
             options.binary_location = _chromium_bin
+            options.add_argument('--window-size=1920,1080')
+            if _ensure_virtual_display():
+                # Real browser inside the virtual screen — no --headless.
+                progress_placeholder.info("🖥️ Using virtual display (Xvfb)")
+            else:
+                progress_placeholder.warning(
+                    "⚠️ Virtual display unavailable — falling back to headless")
+                options.add_argument('--headless=new')
             _service = (Service(_chromedriver_bin) if _chromedriver_bin
                         else Service(ChromeDriverManager().install()))
         else:
