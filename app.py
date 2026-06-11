@@ -1842,6 +1842,26 @@ def _force_set_num_questions(driver, value):
     """, value)
 
 
+def _read_select_value(driver, label):
+    """Read the currently-selected text of a React-select by its label."""
+    return driver.execute_script("""
+        var lbl = arguments[0];
+        var all = document.querySelectorAll('label,p,span,div,h4,h5,h6,legend,li');
+        for (var i = 0; i < all.length; i++){
+            var el = all[i];
+            if (el.children.length > 0 || !el.offsetParent) continue;
+            if ((el.innerText || el.textContent || '').trim() !== lbl) continue;
+            var p = el.parentElement;
+            for (var j = 0; j < 8 && p; j++){
+                var sv = p.querySelector('[class*="single-value"]');
+                if (sv) return (sv.innerText || sv.textContent || '').trim();
+                p = p.parentElement;
+            }
+        }
+        return '';
+    """, label) or ""
+
+
 def fill_section_form(driver, section_name, time_limit, progress_placeholder):
     progress_placeholder.info("📝 Filling section form...")
 
@@ -2410,6 +2430,28 @@ def process_section_questions(driver, questions_df, section_num, progress_placeh
         if needs_marks and not is_empty(marks):
             set_marks_per_question(driver, marks, progress_placeholder)
             time.sleep(0.01)
+
+        # The portal REFUSES to add questions unless Topic + Difficulty are
+        # actually selected ("Choose the topic and difficulty to add questions").
+        # These dropdowns are flaky on the server, so verify they stuck and
+        # re-apply any that are still empty — this is what was making rows skip.
+        for _vattempt in range(4):
+            missing = []
+            if (not is_empty(topic)
+                    and topic.lower() not in _read_select_value(driver, "Topic").lower()):
+                missing.append("Topic")
+            if (not is_empty(diff)
+                    and diff.lower() not in
+                        _read_select_value(driver, "Difficulty Level").lower()):
+                missing.append("Difficulty Level")
+            if not missing:
+                break
+            progress_placeholder.info(f"  🔁 Re-applying filters: {missing}")
+            if "Topic" in missing:
+                click_react_select(driver, "Topic", topic, progress_placeholder)
+            if "Difficulty Level" in missing:
+                click_react_select(driver, "Difficulty Level", diff, progress_placeholder)
+            time.sleep(0.4)
 
         progress_placeholder.info("  📤 Clicking 'Add Questions →'...")
         submitted = False
