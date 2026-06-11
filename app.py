@@ -2388,13 +2388,19 @@ def process_section_questions(driver, questions_df, section_num, progress_placeh
             progress_placeholder.info(
                 "    ✅ Questions loaded — 'Add Questions' now enabled")
 
-        # 3) Click atomically (find + click in ONE JS call so a React re-render
-        #    can't leave a stale element) and CONFIRM the popup actually closed.
-        #    Retry if the click didn't register — this fixes the old
-        #    "'Add Questions →' not clicked after N attempts" failures.
+        # 3) Click the submit button with a REAL browser click (ActionChains /
+        #    native WebElement click) — pure JS .click() does not reliably fire
+        #    this button's React handler, which is why submits silently failed.
+        #    Re-find the element each attempt (avoids stale refs after a
+        #    re-render) and CONFIRM the popup actually closed before counting
+        #    the row as done.
+        from selenium.webdriver.common.action_chains import ActionChains
         for submit_attempt in range(8):
             progress_placeholder.info(f"    🔁 Click attempt {submit_attempt+1}/8")
-            clicked = driver.execute_script("""
+
+            # Clear any overlay that could intercept the click, then return the
+            # actual bottom-most enabled "Add Questions" button element.
+            btn = driver.execute_script("""
                 if(document.activeElement) document.activeElement.blur();
                 var ov=['[class*="suggestion"]','[class*="autocomplete"]',
                         '[class*="__dropdown"]','[class*="-dropdown"]',
@@ -2416,19 +2422,38 @@ def process_section_questions(driver, questions_df, section_num, progress_placeh
                         if(r.width>0 && r.bottom>bestBottom){bestBottom=r.bottom;best=b;}
                     }
                 }
-                if(!best) return false;
-                best.scrollIntoView({block:'center'});
-                try{best.focus();}catch(e){}
-                best.dispatchEvent(new MouseEvent('mousedown',{bubbles:true,cancelable:true}));
-                best.dispatchEvent(new MouseEvent('mouseup',{bubbles:true,cancelable:true}));
-                best.click();
-                return true;
+                return best;
             """)
-            if not clicked:
-                progress_placeholder.warning(
-                    "    ⚠️ Button not clickable — retrying...")
+            if btn is None:
+                time.sleep(0.25)
+                continue
+
+            try:
+                driver.execute_script(
+                    "arguments[0].scrollIntoView({block:'center'});", btn)
+            except Exception:
+                pass
+            time.sleep(0.1)
+
+            # Try a real click first, then native, then JS as last resort.
+            clicked_ok = False
+            for _do_click in (
+                lambda: ActionChains(driver).move_to_element(btn)
+                        .pause(0.05).click().perform(),
+                lambda: btn.click(),
+                lambda: driver.execute_script("arguments[0].click();", btn),
+            ):
+                try:
+                    _do_click()
+                    clicked_ok = True
+                    break
+                except Exception:
+                    continue
+
+            if not clicked_ok:
                 time.sleep(0.2)
                 continue
+
             if poll_popup_closed(driver, timeout=3.0):
                 submitted = True
                 progress_placeholder.success(
@@ -2436,7 +2461,7 @@ def process_section_questions(driver, questions_df, section_num, progress_placeh
                 break
             progress_placeholder.info(
                 "    ↻ Popup still open after click — retrying...")
-            time.sleep(0.15)
+            time.sleep(0.2)
 
         if not submitted:
             reason = "'Add Questions →' not clicked after 8 attempts"
