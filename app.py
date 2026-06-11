@@ -1794,6 +1794,54 @@ def _find_input_near_label(driver, label_texts, numeric=None):
     """, label_texts, numeric)
 
 
+def _force_set_num_questions(driver, value):
+    """
+    Forcefully set the 'Number of Questions' field using a React-compatible
+    native value setter + events. Returns the resulting value as a string.
+    Used right before submitting, since the field can reset to 0 if it was
+    set before the question list finished loading.
+    """
+    return driver.execute_script("""
+        var target = String(arguments[0]);
+        var inp = null;
+        var all = document.querySelectorAll('label,p,span,div,h4,h5,h6,legend,li');
+        for (var i = 0; i < all.length; i++){
+            var el = all[i];
+            if (el.children.length > 0 || !el.offsetParent) continue;
+            if ((el.innerText || el.textContent || '').trim() !== 'Number of Questions') continue;
+            var p = el.parentElement;
+            for (var j = 0; j < 8 && p; j++){
+                var ins = p.querySelectorAll('input');
+                for (var n = 0; n < ins.length; n++){
+                    if (ins[n].offsetParent){ inp = ins[n]; break; }
+                }
+                if (inp) break;
+                p = p.parentElement;
+            }
+            if (inp) break;
+        }
+        if (!inp){
+            var nums = document.querySelectorAll('input[type=number]');
+            for (var k = 0; k < nums.length; k++){
+                if (nums[k].offsetParent){ inp = nums[k]; break; }
+            }
+        }
+        if (!inp) return '';
+        var setter = Object.getOwnPropertyDescriptor(
+            window.HTMLInputElement.prototype, 'value').set;
+        inp.focus();
+        setter.call(inp, '');
+        inp.dispatchEvent(new Event('input',  {bubbles: true}));
+        setter.call(inp, target);
+        inp.dispatchEvent(new Event('input',  {bubbles: true}));
+        inp.dispatchEvent(new Event('change', {bubbles: true}));
+        inp.dispatchEvent(new KeyboardEvent('keydown', {bubbles: true}));
+        inp.dispatchEvent(new KeyboardEvent('keyup',   {bubbles: true}));
+        inp.blur();
+        return inp.value || '';
+    """, value)
+
+
 def fill_section_form(driver, section_name, time_limit, progress_placeholder):
     progress_placeholder.info("📝 Filling section form...")
 
@@ -2398,6 +2446,23 @@ def process_section_questions(driver, questions_df, section_num, progress_placeh
                                  "Difficulty": diff, "Sub Topic": sub, "Num Q": num_q,
                                  "Marks": marks, "Reason": reason})
             continue
+
+        # 1b) Re-assert 'Number of Questions' now that the popup + question list
+        #     are present. The field silently resets to 0 if it was set before
+        #     the list loaded — and with 0 questions the 'Add Questions' click
+        #     is a no-op, which is exactly why rows were skipping.
+        if not is_empty(num_q):
+            _got = ""
+            for _try in range(5):
+                _got = _force_set_num_questions(driver, num_q)
+                if str(_got).strip() == str(num_q).strip():
+                    break
+                time.sleep(0.4)
+            if str(_got).strip() == str(num_q).strip():
+                progress_placeholder.info(f"  🔢 Number of Questions set to {_got}")
+            else:
+                progress_placeholder.warning(
+                    f"  ⚠️ Number of Questions wanted {num_q}, got '{_got}'")
 
         # 2) Wait for it to become enabled. The portal loads matching questions
         #    asynchronously, and that call is slower from a remote server, so a
