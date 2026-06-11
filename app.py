@@ -1756,6 +1756,44 @@ def select_section_type(driver, wait, target_section, progress_placeholder):
 # FILL SECTION FORM
 # ============================================================
 
+def _find_input_near_label(driver, label_texts, numeric=None):
+    """
+    Robustly find the input belonging to a labelled field by walking the DOM
+    up from the label text and searching for the nearest visible input.
+    numeric: True = only number inputs, False = only non-number, None = any.
+    More resilient than rigid XPaths across layout changes / real browser.
+    """
+    return driver.execute_script("""
+        var labels = arguments[0];
+        var numeric = arguments[1];
+        function isMatch(el){
+            var t = (el.innerText || el.textContent || '').trim();
+            for (var k = 0; k < labels.length; k++) if (t === labels[k]) return true;
+            return false;
+        }
+        var all = document.querySelectorAll('label,p,span,div,h4,h5,h6,legend,li');
+        for (var i = 0; i < all.length; i++){
+            var el = all[i];
+            if (el.children.length > 0 || !el.offsetParent) continue;
+            if (!isMatch(el)) continue;
+            var p = el.parentElement;
+            for (var j = 0; j < 8 && p; j++){
+                var inputs = p.querySelectorAll('input');
+                for (var n = 0; n < inputs.length; n++){
+                    var inp = inputs[n];
+                    if (!inp.offsetParent) continue;
+                    var ty = (inp.type || '').toLowerCase();
+                    if (numeric === true && ty !== 'number') continue;
+                    if (numeric === false && ty === 'number') continue;
+                    return inp;
+                }
+                p = p.parentElement;
+            }
+        }
+        return null;
+    """, label_texts, numeric)
+
+
 def fill_section_form(driver, section_name, time_limit, progress_placeholder):
     progress_placeholder.info("📝 Filling section form...")
 
@@ -1792,62 +1830,59 @@ def fill_section_form(driver, section_name, time_limit, progress_placeholder):
         time_filled = False
         progress_placeholder.info(f"  ⏰ Setting time limit to: {time_limit} mins")
 
+        # Gather candidate inputs: robust DOM-walk first, then XPath fallbacks.
+        candidates = []
+        js_field = _find_input_near_label(
+            driver,
+            ['Time Limit (in Mins)', 'Time Limit', 'Time Limit(in Mins)'],
+            numeric=True)
+        if js_field is not None:
+            candidates.append(js_field)
         for xpath in [
             "//label[normalize-space(text())='Time Limit (in Mins)']/following-sibling::input[1]",
-            "//label[contains(text(),'Time Limit (in Mins)')]/..//input[@type='number']",
             "//label[contains(text(),'Time Limit')]/..//input[@type='number']",
             "//*[normalize-space(text())='Time Limit (in Mins)']/following::input[@type='number'][1]",
         ]:
             try:
-                field = driver.find_element(By.XPATH, xpath)
-                if field.is_displayed():
-                    current_value = field.get_attribute("value") or ""
-                    progress_placeholder.info(f"    🔍 Current time limit value: '{current_value}'")
-                    driver.execute_script(
-                        "arguments[0].scrollIntoView({block:'center'});"
-                        "arguments[0].focus();", field)
-                    time.sleep(0.05)
-                    _safe_send(driver, field, Keys.CONTROL + "a")
-                    time.sleep(0.03)
-                    _safe_key(driver, field, 'DELETE')
-                    time.sleep(0.03)
-                    driver.execute_script("""
-                        var field = arguments[0];
-                        field.value = '';
-                        field.dispatchEvent(new Event('input', {bubbles: true}));
-                        field.dispatchEvent(new Event('change', {bubbles: true}));
-                    """, field)
-                    time.sleep(0.03)
-                    for _ in range(10):
-                        _safe_key(driver, field, 'BACK_SPACE')
-                        time.sleep(0.01)
-                    cleared_value = field.get_attribute("value") or ""
-                    progress_placeholder.info(f"    🧹 After clearing: '{cleared_value}'")
-                    _safe_send(driver, field, str(time_limit))
-                    time.sleep(0.05)
-                    driver.execute_script("""
-                        var field = arguments[0];
-                        field.dispatchEvent(new Event('input',  {bubbles: true}));
-                        field.dispatchEvent(new Event('change', {bubbles: true}));
-                        field.dispatchEvent(new Event('blur',   {bubbles: true}));
-                    """, field)
-                    final_value = field.get_attribute("value") or ""
-                    progress_placeholder.info(f"    ✅ Final time limit value: '{final_value}'")
-                    if final_value == str(time_limit):
-                        time_filled = True
-                        progress_placeholder.success(
-                            f"  ✅ Time limit successfully set: {time_limit} mins")
-                        break
-                    else:
-                        progress_placeholder.warning(
-                            f"    ⚠️ Value mismatch: expected '{time_limit}', got '{final_value}'")
-            except Exception as e:
-                progress_placeholder.warning(
-                    f"    ⚠️ Error with xpath {xpath}: {str(e)[:50]}")
+                el = driver.find_element(By.XPATH, xpath)
+                if el.is_displayed():
+                    candidates.append(el)
+            except Exception:
+                pass  # quietly skip — we only warn if ALL candidates fail
+
+        for field in candidates:
+            try:
+                driver.execute_script(
+                    "arguments[0].scrollIntoView({block:'center'});"
+                    "arguments[0].focus();", field)
+                time.sleep(0.05)
+                _safe_send(driver, field, Keys.CONTROL + "a")
+                _safe_key(driver, field, 'DELETE')
+                driver.execute_script("""
+                    var f = arguments[0]; f.value = '';
+                    f.dispatchEvent(new Event('input',  {bubbles: true}));
+                    f.dispatchEvent(new Event('change', {bubbles: true}));
+                """, field)
+                _safe_send(driver, field, str(time_limit))
+                time.sleep(0.05)
+                driver.execute_script("""
+                    var f = arguments[0];
+                    f.dispatchEvent(new Event('input',  {bubbles: true}));
+                    f.dispatchEvent(new Event('change', {bubbles: true}));
+                    f.dispatchEvent(new Event('blur',   {bubbles: true}));
+                """, field)
+                if (field.get_attribute("value") or "") == str(time_limit):
+                    time_filled = True
+                    progress_placeholder.success(
+                        f"  ✅ Time limit set: {time_limit} mins")
+                    break
+            except Exception:
                 continue
 
         if not time_filled:
-            progress_placeholder.warning("  ❌ Could not fill time limit after trying all methods")
+            progress_placeholder.warning(
+                f"  ⚠️ Could not set time limit ({time_limit} mins) — "
+                "section may use the default")
 
     progress_placeholder.success("  ✅ Section form filled — ready to add questions")
 
