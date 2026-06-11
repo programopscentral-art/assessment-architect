@@ -1842,6 +1842,25 @@ def _force_set_num_questions(driver, value):
     """, value)
 
 
+def _tag_present(driver, tag):
+    """True if an exclusive-tag chip containing `tag` is currently visible."""
+    try:
+        return bool(driver.execute_script("""
+            var tag = arguments[0];
+            var nodes = document.querySelectorAll('span,div,li,button,p');
+            for (var i = 0; i < nodes.length; i++){
+                var el = nodes[i];
+                if (!el.offsetParent) continue;
+                if (el.children.length > 2) continue;   // chips are small leaves
+                var t = (el.innerText || el.textContent || '').trim();
+                if (t.indexOf(tag) !== -1) return true;
+            }
+            return false;
+        """, tag))
+    except Exception:
+        return False
+
+
 def _read_select_value(driver, label):
     """Read the currently-selected text of a React-select by its label."""
     return driver.execute_script("""
@@ -2431,11 +2450,14 @@ def process_section_questions(driver, questions_df, section_num, progress_placeh
             set_marks_per_question(driver, marks, progress_placeholder)
             time.sleep(0.01)
 
-        # The portal REFUSES to add questions unless Topic + Difficulty are
-        # actually selected ("Choose the topic and difficulty to add questions").
-        # These dropdowns are flaky on the server, so verify they stuck and
-        # re-apply any that are still empty — this is what was making rows skip.
-        for _vattempt in range(4):
+        # The portal won't add questions unless the section's filters actually
+        # took. For tag-based rows that's the Exclusive Tag; for others it's
+        # Topic/Difficulty ("Choose the topic and difficulty to add questions").
+        # These React fields are flaky over the server's network latency, so
+        # verify each one stuck and re-apply any that didn't before submitting.
+        tag_list = [t.strip() for t in str(tags).split(",")
+                    if t.strip() and t.strip().lower() not in ("nan", "none", "")]
+        for _vattempt in range(5):
             missing = []
             if (not is_empty(topic)
                     and topic.lower() not in _read_select_value(driver, "Topic").lower()):
@@ -2443,15 +2465,21 @@ def process_section_questions(driver, questions_df, section_num, progress_placeh
             if (not is_empty(diff)
                     and diff.lower() not in
                         _read_select_value(driver, "Difficulty Level").lower()):
-                missing.append("Difficulty Level")
-            if not missing:
+                missing.append("Difficulty")
+            tags_missing = [t for t in tag_list if not _tag_present(driver, t)]
+            if not missing and not tags_missing:
                 break
-            progress_placeholder.info(f"  🔁 Re-applying filters: {missing}")
-            if "Topic" in missing:
-                click_react_select(driver, "Topic", topic, progress_placeholder)
-            if "Difficulty Level" in missing:
-                click_react_select(driver, "Difficulty Level", diff, progress_placeholder)
-            time.sleep(0.4)
+            if missing:
+                progress_placeholder.info(f"  🔁 Re-applying {missing}")
+                if "Topic" in missing:
+                    click_react_select(driver, "Topic", topic, progress_placeholder)
+                if "Difficulty" in missing:
+                    click_react_select(driver, "Difficulty Level", diff, progress_placeholder)
+            if tags_missing:
+                progress_placeholder.info(f"  🔁 Re-applying tags: {tags_missing}")
+                set_exclusive_tags(driver, ", ".join(tags_missing), progress_placeholder)
+                dismiss_tag_overlays(driver, progress_placeholder)
+            time.sleep(0.5)
 
         progress_placeholder.info("  📤 Clicking 'Add Questions →'...")
         submitted = False
