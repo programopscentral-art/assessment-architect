@@ -2814,23 +2814,7 @@ def automate_all_sections(driver, wait, sections, progress_placeholder):
 # ============================================================
 
 def _show_debug_screenshot(driver, label=""):
-    """
-    Capture and display what the (often headless / invisible) browser sees.
-    Critical for debugging cloud runs where there is no visible window.
-    """
-    try:
-        if driver is None:
-            return
-        try:
-            cur = driver.current_url
-        except Exception:
-            cur = "(unknown)"
-        png = driver.get_screenshot_as_png()
-        st.warning(f"📸 Server browser view at failure ({label}) — URL: {cur}")
-        st.image(png, caption=f"Headless Chrome view ({label})",
-                 use_container_width=True)
-    except Exception as _e:
-        st.info(f"(Could not capture screenshot: {str(_e)[:150]})")
+    pass
 
 
 def _nav_click(driver, xpath, text_fragment, step_name, progress_placeholder,
