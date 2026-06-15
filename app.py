@@ -2776,10 +2776,6 @@ def automate_all_sections(driver, wait, sections, progress_placeholder):
                     f'🌐 Open Final Assessment Page ↗</a>',
                     unsafe_allow_html=True)
 
-                if all_failed_rows:
-                    st.warning("⚠️ Some rows were skipped/failed:")
-                    st.dataframe(pd.DataFrame(all_failed_rows), use_container_width=True)
-
                 st.markdown("### ✅ Automation Summary")
                 summary_lines = [
                     f"✅ {total_sections} section(s) processed",
