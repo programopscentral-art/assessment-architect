@@ -2785,6 +2785,11 @@ def automate_all_sections(driver, wait, sections, progress_placeholder):
                     f"✅ Final URL captured",
                 ]
                 st.info("\n\n".join(summary_lines))
+
+                st.markdown("---")
+                if st.button("🔄 Start New Process", type="primary"):
+                    st.rerun()
+
                 return True
 
             except Exception as e:
