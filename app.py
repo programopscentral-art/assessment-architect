@@ -158,22 +158,27 @@ st.markdown(
     unsafe_allow_html=True
 )
 
+if "form_key" not in st.session_state:
+    st.session_state.form_key = 0
+
 # ============================================================
 # UI LAYOUT
 # ============================================================
+_fk = st.session_state.form_key
 col1, col2 = st.columns([1, 1])
 with col1:
     st.subheader("📁 1. Load Data")
     uploaded_file = st.file_uploader(
-        "Upload Assessment CSV (Single or Multi-Section)", type=["csv"], key="assessment_csv"
+        "Upload Assessment CSV (Single or Multi-Section)", type=["csv"],
+        key=f"assessment_csv_{_fk}"
     )
 with col2:
     st.subheader("🔐 2. Portal Access")
-    mob     = st.text_input("Mobile Number", placeholder="9876543210")
-    otp_val = st.text_input("One Time Passcode", placeholder="6-digit OTP", max_chars=6)
+    mob     = st.text_input("Mobile Number", placeholder="9876543210", key=f"mob_{_fk}")
+    otp_val = st.text_input("One Time Passcode", placeholder="6-digit OTP", max_chars=6, key=f"otp_{_fk}")
 
 st.subheader("⚙️ 3. Settings")
-wait_time = st.slider("Element Wait Time (seconds)", 5, 30, 10)
+wait_time = st.slider("Element Wait Time (seconds)", 5, 30, 10, key=f"wait_{_fk}")
 
 # ============================================================
 # CSV PARSER
@@ -2788,6 +2793,7 @@ def automate_all_sections(driver, wait, sections, progress_placeholder):
 
                 st.markdown("---")
                 if st.button("🔄 Start New Process", type="primary"):
+                    st.session_state.form_key += 1
                     st.rerun()
 
                 return True
