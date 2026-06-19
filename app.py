@@ -2792,11 +2792,13 @@ def automate_all_sections(driver, wait, sections, progress_placeholder):
                 st.info("\n\n".join(summary_lines))
 
                 st.markdown("---")
-                if st.button("🔄 Start New Process", type="primary"):
-                    new_key = st.session_state.get("form_key", 0) + 1
-                    st.session_state.clear()
-                    st.session_state["form_key"] = new_key
-                    st.rerun()
+                st.markdown(
+                    '<a href="/" target="_self" style="'
+                    'display:inline-block;background-color:#FF4B4B;color:white;'
+                    'padding:0.6rem 1.4rem;border-radius:0.5rem;text-decoration:none;'
+                    'font-weight:bold;font-size:1rem;">🔄 Start New Process</a>',
+                    unsafe_allow_html=True
+                )
 
                 return True
 
