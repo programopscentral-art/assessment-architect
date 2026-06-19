@@ -2793,7 +2793,9 @@ def automate_all_sections(driver, wait, sections, progress_placeholder):
 
                 st.markdown("---")
                 if st.button("🔄 Start New Process", type="primary"):
-                    st.session_state.form_key += 1
+                    new_key = st.session_state.get("form_key", 0) + 1
+                    st.session_state.clear()
+                    st.session_state["form_key"] = new_key
                     st.rerun()
 
                 return True
